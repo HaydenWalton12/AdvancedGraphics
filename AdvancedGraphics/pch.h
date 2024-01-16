@@ -10,13 +10,23 @@
 #include <D3Dcompiler.h>
 #include <DirectXMath.h>
 #include "d3dx12.h"
+#include "DDSTextureLoader.h"
 #include <string>
+
 #include <wincodec.h>
+#include <vector>
 
 // this will only call release if an object exists (prevents exceptions calling release on non existant objects)
 #define SAFE_RELEASE(p) { if ( (p) ) { (p)->Release(); (p) = 0; } }
 
 using namespace DirectX; // we will be using the directxmath library
+
+
+struct Vertex {
+	Vertex(float x, float y, float z, float u, float v) : pos(x, y, z), texCoord(u, v) {}
+	XMFLOAT3 pos;
+	XMFLOAT2 texCoord;
+};
 
 // Handle to the window
 HWND hwnd = NULL;
@@ -56,9 +66,9 @@ const int frameBufferCount = 3; // number of buffers we want, 2 for double buffe
 
 ID3D12Device* device; // direct3d device
 
-IDXGISwapChain3* swapChain; // swapchain used to switch between render targets
+IDXGISwapChain3* swap_chain; // swapchain used to switch between render targets
 
-ID3D12CommandQueue* commandQueue; // container for command lists
+ID3D12CommandQueue* command_queue; // container for command lists
 
 ID3D12DescriptorHeap* rtvDescriptorHeap; // a descriptor heap to hold resources like the render targets
 
@@ -74,14 +84,15 @@ ID3D12Fence* fence[frameBufferCount];    // an object that is locked while our c
 HANDLE fenceEvent; // a handle to an event when our fence is unlocked by the gpu
 
 UINT64 fenceValue[frameBufferCount]; // this value is incremented each frame. each fence will have its own value
-
+IDXGIFactory4* factory;
 int frameIndex; // current rtv we are on
-
+D3D12_STATIC_SAMPLER_DESC sampler;
 int rtvDescriptorSize; // size of the rtv descriptor on the device (all front and back buffers will be the same size)
 // function declarations
 
 bool InitD3D(); // initializes direct3d 12
-
+bool initialise_swap_chain();
+bool initialise_work_submission();
 void Update(); // update the game logic
 
 void UpdatePipeline(); // update the direct3d pipeline (update command lists)
@@ -91,8 +102,16 @@ void Render(); // execute the command list
 void Cleanup(); // release com ojects and clean up memory
 
 void WaitForPreviousFrame(); // wait until gpu is finished with command list
+bool build_shaders_and_input_layout();
+bool build_pso();
+bool build_geometry();
+bool build_root_signature();
+void build_viewport_scissor_rect();
 
-ID3D12PipelineState* pipelineStateObject; // pso containing a pipeline state
+D3D12_SHADER_BYTECODE pixel_shader_byte_code;
+D3D12_SHADER_BYTECODE vertex_shader_byte_code;
+std::vector< D3D12_INPUT_ELEMENT_DESC> input_layout;
+ID3D12PipelineState* pso; // pso containing a pipeline state
 
 ID3D12RootSignature* rootSignature; // root signature defines data shaders will access
 
@@ -100,17 +119,11 @@ D3D12_VIEWPORT viewport; // area that output from rasterizer will be stretched t
 
 D3D12_RECT scissorRect; // the area to draw in. pixels outside that area will not be drawn onto
 
-ID3D12Resource* vertexBuffer; // a default buffer in GPU memory that we will load vertex data for our triangle into
-ID3D12Resource* indexBuffer; // a default buffer in GPU memory that we will load index data for our triangle into
-
-D3D12_VERTEX_BUFFER_VIEW vertexBufferView; // a structure containing a pointer to the vertex data in gpu memory
-// the total size of the buffer, and the size of each element (vertex)
-
-D3D12_INDEX_BUFFER_VIEW indexBufferView; // a structure holding information about the index buffer
-
 ID3D12Resource* depthStencilBuffer; // This is the memory for our depth buffer. it will also be used for a stencil buffer in a later tutorial
 ID3D12DescriptorHeap* dsDescriptorHeap; // This is a heap for our depth/stencil buffer descriptor
 
+ID3DBlob* vertex_shader_data;
+ID3DBlob* pixel_shader_data;
 // this is the structure of our constant buffer.
 struct ConstantBufferPerObject {
 	XMFLOAT4X4 wvpMat;
@@ -137,24 +150,56 @@ UINT8* cbvGPUAddress[frameBufferCount]; // this is a pointer to each of the cons
 XMFLOAT4X4 cameraProjMat; // this will store our projection matrix
 XMFLOAT4X4 cameraViewMat; // this will store our view matrix
 
-XMFLOAT4X4 cube1WorldMat; // our first cubes world matrix (transformation matrix)
-XMFLOAT4X4 cube1RotMat; // this will keep track of our rotation for the first cube
-XMFLOAT4 cube1Position; // our first cubes position in space
+struct Geometry
+{
+	D3D12_VERTEX_BUFFER_VIEW vertex_buffer_view()
+	{
+		D3D12_VERTEX_BUFFER_VIEW view;
 
-XMFLOAT4X4 cube2WorldMat; // our first cubes world matrix (transformation matrix)
-XMFLOAT4X4 cube2RotMat; // this will keep track of our rotation for the second cube
-XMFLOAT4 cube2PositionOffset; // our second cube will rotate around the first cube, so this is the position offset from the first cube
+		view.BufferLocation = vertex_default->GetGPUVirtualAddress();
+		view.StrideInBytes = sizeof(Vertex);
+		view.SizeInBytes = vertex_buffer_size;
+		return view;
+	}
 
+	D3D12_INDEX_BUFFER_VIEW index_buffer_view()
+	{
+		D3D12_INDEX_BUFFER_VIEW view;
+
+		view.BufferLocation = index_default->GetGPUVirtualAddress();
+		view.Format = DXGI_FORMAT_R32_UINT; // 32-bit unsigned integer (this is what a dword is, double word, a word is 2 bytes)
+		view.SizeInBytes = index_buffer_size;
+		return view;
+	}
+	ID3D12Resource* vertex_default; // a default buffer in GPU memory that we will load vertex data for our triangle into
+	ID3D12Resource* index_default; // a default buffer in GPU memory that we will load index data for our triangle into
+
+	ID3D12Resource* vertex_upload;
+	ID3D12Resource* index_upload; 
+
+	XMFLOAT4X4 world; 
+	XMFLOAT4X4 rotation;
+	XMFLOAT4 position; 
+	int index_buffer_size;
+	int index_count;
+	int vertex_buffer_size;
+};
+
+struct Texture
+{
+	std::wstring file_name;	
+	Microsoft::WRL::ComPtr<ID3D12Resource> texture_default_buffer = nullptr;
+	Microsoft::WRL::ComPtr<ID3D12Resource> texture_upload_buffer = nullptr;
+};
 int numCubeIndices; // the number of indices to draw the cube
 
 ID3D12Resource* textureBuffer; // the resource heap containing our texture
 ID3D12Resource* textureBuffer1; // the resource heap containing our texture
-
-int LoadImageDataFromFile(BYTE** imageData, D3D12_RESOURCE_DESC& resourceDescription, LPCWSTR filename, int& bytesPerRow);
-
-DXGI_FORMAT GetDXGIFormatFromWICFormat(WICPixelFormatGUID& wicFormatGUID);
-WICPixelFormatGUID GetConvertToWICFormat(WICPixelFormatGUID& wicFormatGUID);
-int GetDXGIFormatBitsPerPixel(DXGI_FORMAT& dxgiFormat);
-
-ID3D12DescriptorHeap* mainDescriptorHeap;
+DXGI_SAMPLE_DESC sample_desc;
+ID3D12DescriptorHeap* texture_heap;
 ID3D12Resource* textureBufferUploadHeap;
+
+void load_texture();
+Geometry* cube = new Geometry();
+Texture* cube_texture = new Texture();
+Texture* cube_normal = new Texture();
