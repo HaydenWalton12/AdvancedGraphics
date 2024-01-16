@@ -1018,6 +1018,7 @@ void Update()
 {
 	// update app logic, such as moving the camera or figuring out what objects are in view
 
+
 	// create rotation matrices
 	XMMATRIX rotXMat = XMMatrixRotationX(0.0001f);
 	XMMATRIX rotYMat = XMMatrixRotationY(0.0002f);
