@@ -21,137 +21,54 @@
 
 using namespace DirectX; // we will be using the directxmath library
 
+const int frame_buffer_count = 3;
+// we will exit the program when this becomes false
+bool Running = true;
+// width and height of the window
+int Width = 800;
+int Height = 600;
+// create a window
+ID3D12Device* device; // direct3d device
+//Constant Buffer Data Per Object
+struct ObjectConstantBuffer
+{
+	XMFLOAT4X4 wvpMat;
+};
+struct DefaultConstantBuffer
+{
 
+};
 struct Vertex {
 	Vertex(float x, float y, float z, float u, float v) : pos(x, y, z), texCoord(u, v) {}
 	XMFLOAT3 pos;
 	XMFLOAT2 texCoord;
 };
+struct default_buffer
+{
+	ID3D12Resource* create_default_buffer()
+	{
+		//If we are creating constant buffer upload buffer, elements need to be multiples of
+		//256 bytes. This is due to hardware can only view constant data at elements at this size with offset.
 
-// Handle to the window
-HWND hwnd = NULL;
+		ID3D12Resource* buffer = nullptr;;
 
-// name of the window (not the title)
-LPCTSTR WindowName = L"BzTutsApp";
+		// Create the actual default buffer resource.
+		device->CreateCommittedResource(
+			&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+			D3D12_HEAP_FLAG_NONE,
+			&CD3DX12_RESOURCE_DESC::Buffer(byte_size),
+			D3D12_RESOURCE_STATE_COMMON,
+			nullptr,
+			IID_PPV_ARGS(&buffer));
 
-// title of the window
-LPCTSTR WindowTitle = L"Bz Window";
-
-// width and height of the window
-int Width = 800;
-int Height = 600;
-
-// is window full screen?
-bool FullScreen = false;
-
-// we will exit the program when this becomes false
-bool Running = true;
-
-// create a window
-bool InitializeWindow(HINSTANCE hInstance,
-	int ShowWnd,
-	bool fullscreen);
-
-// main application loop
-void mainloop();
-
-// callback function for windows messages
-LRESULT CALLBACK WndProc(HWND hWnd,
-	UINT msg,
-	WPARAM wParam,
-	LPARAM lParam);
-
-// direct3d stuff
-const int frameBufferCount = 3; // number of buffers we want, 2 for double buffering, 3 for tripple buffering
-
-ID3D12Device* device; // direct3d device
-
-IDXGISwapChain3* swap_chain; // swapchain used to switch between render targets
-
-ID3D12CommandQueue* command_queue; // container for command lists
-
-ID3D12DescriptorHeap* rtvDescriptorHeap; // a descriptor heap to hold resources like the render targets
-
-ID3D12Resource* renderTargets[frameBufferCount]; // number of render targets equal to buffer count
-
-ID3D12CommandAllocator* commandAllocator[frameBufferCount]; // we want enough allocators for each buffer * number of threads (we only have one thread)
-
-ID3D12GraphicsCommandList* commandList; // a command list we can record commands into, then execute them to render the frame
-
-ID3D12Fence* fence[frameBufferCount];    // an object that is locked while our command list is being executed by the gpu. We need as many 
-//as we have allocators (more if we want to know when the gpu is finished with an asset)
-
-HANDLE fenceEvent; // a handle to an event when our fence is unlocked by the gpu
-
-UINT64 fenceValue[frameBufferCount]; // this value is incremented each frame. each fence will have its own value
-IDXGIFactory4* factory;
-int frameIndex; // current rtv we are on
-D3D12_STATIC_SAMPLER_DESC sampler;
-int rtvDescriptorSize; // size of the rtv descriptor on the device (all front and back buffers will be the same size)
-// function declarations
-
-bool InitD3D(); // initializes direct3d 12
-bool initialise_swap_chain();
-bool initialise_work_submission();
-void Update(); // update the game logic
-
-void UpdatePipeline(); // update the direct3d pipeline (update command lists)
-
-void Render(); // execute the command list
-
-void Cleanup(); // release com ojects and clean up memory
-
-void WaitForPreviousFrame(); // wait until gpu is finished with command list
-bool build_shaders_and_input_layout();
-bool build_pso();
-bool build_geometry();
-bool build_root_signature();
-void build_viewport_scissor_rect();
-
-D3D12_SHADER_BYTECODE pixel_shader_byte_code;
-D3D12_SHADER_BYTECODE vertex_shader_byte_code;
-std::vector< D3D12_INPUT_ELEMENT_DESC> input_layout;
-ID3D12PipelineState* pso; // pso containing a pipeline state
-
-ID3D12RootSignature* rootSignature; // root signature defines data shaders will access
-
-D3D12_VIEWPORT viewport; // area that output from rasterizer will be stretched to.
-
-D3D12_RECT scissorRect; // the area to draw in. pixels outside that area will not be drawn onto
-
-ID3D12Resource* depthStencilBuffer; // This is the memory for our depth buffer. it will also be used for a stencil buffer in a later tutorial
-ID3D12DescriptorHeap* dsDescriptorHeap; // This is a heap for our depth/stencil buffer descriptor
-
-ID3DBlob* vertex_shader_data;
-ID3DBlob* pixel_shader_data;
-// this is the structure of our constant buffer.
-struct ConstantBufferPerObject {
-	XMFLOAT4X4 wvpMat;
+		return buffer;
+	}
+	int byte_size;
+	ID3D12Resource* default_buffer;
 };
-
-// Constant buffers must be 256-byte aligned which has to do with constant reads on the GPU.
-// We are only able to read at 256 byte intervals from the start of a resource heap, so we will
-// make sure that we add padding between the two constant buffers in the heap (one for cube1 and one for cube2)
-// Another way to do this would be to add a float array in the constant buffer structure for padding. In this case
-// we would need to add a float padding[50]; after the wvpMat variable. This would align our structure to 256 bytes (4 bytes per float)
-// The reason i didn't go with this way, was because there would actually be wasted cpu cycles when memcpy our constant
-// buffer data to the gpu virtual address. currently we memcpy the size of our structure, which is 16 bytes here, but if we
-// were to add the padding array, we would memcpy 64 bytes if we memcpy the size of our structure, which is 50 wasted bytes
-// being copied.
-int ConstantBufferPerObjectAlignedSize = (sizeof(ConstantBufferPerObject) + 255) & ~255;
-
-ConstantBufferPerObject cbPerObject; // this is the constant buffer data we will send to the gpu 
-// (which will be placed in the resource we created above)
-
-ID3D12Resource* constantBufferUploadHeaps[frameBufferCount]; // this is the memory on the gpu where constant buffers for each frame will be placed
-
-UINT8* cbvGPUAddress[frameBufferCount]; // this is a pointer to each of the constant buffer resource heaps
-
-XMFLOAT4X4 cameraProjMat; // this will store our projection matrix
-XMFLOAT4X4 cameraViewMat; // this will store our view matrix
-
 struct Geometry
 {
+	std::wstring name;
 	D3D12_VERTEX_BUFFER_VIEW vertex_buffer_view()
 	{
 		D3D12_VERTEX_BUFFER_VIEW view;
@@ -175,31 +92,278 @@ struct Geometry
 	ID3D12Resource* index_default; // a default buffer in GPU memory that we will load index data for our triangle into
 
 	ID3D12Resource* vertex_upload;
-	ID3D12Resource* index_upload; 
+	ID3D12Resource* index_upload;
 
-	XMFLOAT4X4 world; 
+	XMFLOAT4X4 world;
 	XMFLOAT4X4 rotation;
-	XMFLOAT4 position; 
+	XMFLOAT4 position;
 	int index_buffer_size;
 	int index_count;
 	int vertex_buffer_size;
 };
-
 struct Texture
 {
-	std::wstring file_name;	
+	std::wstring file_name;
 	Microsoft::WRL::ComPtr<ID3D12Resource> texture_default_buffer = nullptr;
 	Microsoft::WRL::ComPtr<ID3D12Resource> texture_upload_buffer = nullptr;
 };
-int numCubeIndices; // the number of indices to draw the cube
+struct Shader
+{
+	Shader(LPCWSTR file_name, LPCSTR entry, LPCSTR target)
+	{
 
-ID3D12Resource* textureBuffer; // the resource heap containing our texture
-ID3D12Resource* textureBuffer1; // the resource heap containing our texture
-DXGI_SAMPLE_DESC sample_desc;
-ID3D12DescriptorHeap* texture_heap;
-ID3D12Resource* textureBufferUploadHeap;
+		HRESULT hr;
+		hr = D3DCompileFromFile(file_name,
+			nullptr,
+			nullptr,
+			entry,
+			target,
+			D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION,
+			0,
+			&shader_data,
+			&error);
+		if (FAILED(hr))
+		{
+			OutputDebugStringA((char*)error->GetBufferPointer());
+		}
+	}
+	ID3DBlob* error;
+	LPCWSTR file_name;
+	LPCSTR entry_point;
+	LPCSTR target;
+	bool failed;
+	ID3DBlob* shader_data;
+	D3D12_SHADER_BYTECODE shader_byte_code()
+	{
+		D3D12_SHADER_BYTECODE byte_code;
+		byte_code = {};
+		byte_code.BytecodeLength = shader_data->GetBufferSize();
+		byte_code.pShaderBytecode = shader_data->GetBufferPointer();
 
-void load_texture();
-Geometry* cube = new Geometry();
+		return byte_code;
+	};
+
+};
+struct upload_buffer
+{
+	void create_upload_buffer(int byte_size , int element_count)
+	{
+		element_byte_size = byte_size;
+		HRESULT hr;
+		hr = device->CreateCommittedResource(
+			&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), // this heap will be used to upload the constant buffer data
+			D3D12_HEAP_FLAG_NONE, // no flags
+			&CD3DX12_RESOURCE_DESC::Buffer(1024 * 64), // size of the resource heap. Must be a multiple of 64KB for single-textures and constant buffers
+			D3D12_RESOURCE_STATE_GENERIC_READ, // will be data that is read from so we keep it in the generic read state
+			nullptr, // we do not have use an optimized clear value for constant buffers
+			IID_PPV_ARGS(&upload_buffer));
+
+
+		if (FAILED(hr))
+		{
+			Running = false;
+		}
+		hr = upload_buffer->Map(0, nullptr, reinterpret_cast<void**>(&mapped_data));
+
+		upload_buffer->SetName(L"Constant Buffer Upload Resource Heap");
+	
+
+	}
+	void copy_data(int element , ObjectConstantBuffer data)
+	{
+		memcpy(&mapped_data[element * element_byte_size], &data, sizeof(ObjectConstantBuffer));
+
+	}
+	BYTE* mapped_data = nullptr;
+
+	ID3D12Resource* upload_buffer;
+	int element_byte_size;
+
+};
+struct FrameResource
+{
+
+
+	FrameResource(int object_count)
+	{
+		constant_buffer_object = new upload_buffer();
+		constant_buffer_default = new upload_buffer();
+
+		constant_buffer_per_object_byte_size = (sizeof(ObjectConstantBuffer) + 255) & ~255;
+		//constant_buffer_default_byte_size = (sizeof(DefaultConstantBuffer) + 255) & ~255;
+
+		constant_buffer_object->create_upload_buffer(constant_buffer_per_object_byte_size, object_count);
+		//constant_buffer_default->create_upload_buffer(constant_buffer_default_byte_size, 1);
+	}
+
+	int constant_buffer_per_object_byte_size;
+	int constant_buffer_default_byte_size;
+	ObjectConstantBuffer cbPerObject; 
+	upload_buffer* constant_buffer_object;
+	upload_buffer* constant_buffer_default;
+	UINT8* cb_gpu_object_address;
+
+
+};
+struct depth
+{
+
+
+	D3D12_DEPTH_STENCIL_VIEW_DESC depth_stencil_view()
+	{
+		D3D12_DEPTH_STENCIL_VIEW_DESC view = {};
+
+		view.Format = DXGI_FORMAT_D32_FLOAT;
+		view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+		view.Flags = D3D12_DSV_FLAG_NONE;
+		
+		return view;
+	}
+
+	D3D12_CLEAR_VALUE clear_value()
+	{
+		D3D12_CLEAR_VALUE value = {};
+		value.Format = DXGI_FORMAT_D32_FLOAT;
+		value.DepthStencil.Depth = 1.0f;
+		value.DepthStencil.Stencil = 0;
+
+		return value;
+	}
+
+	ID3D12DescriptorHeap* depth_heap;
+	ID3D12Resource* depth_stencil_data;
+};
+struct rtv
+{
+	int rtv_descriptor_size;
+	ID3D12DescriptorHeap* rtv_heap;
+	ID3D12Resource* render_targets[frame_buffer_count];
+};
+
+DXGI_MODE_DESC back_buffer_desc()
+{
+	DXGI_MODE_DESC desc = {};
+	desc.Width = Width;
+	desc.Height = Height;
+	desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+	return desc;
+}
+
+
+
+//For CPU - GPU synchronization
+ID3D12Fence* fence[frame_buffer_count];
+HANDLE fence_event;
+UINT64 fence_value[frame_buffer_count];
+// Handle to the window
+HWND hwnd = NULL;
+
+LPCTSTR name = L"Advance Graphics";
+
+
+
+// is window full screen?
+bool full_screen = false;
+
+
+bool initialise_window(HINSTANCE hInstance,int ShowWnd,bool fullscreen);
+
+// main application loop
+void mainloop();
+
+// callback function for windows messages
+LRESULT CALLBACK WndProc(HWND hWnd,
+	UINT msg,
+	WPARAM wParam,
+	LPARAM lParam);
+
+
+
+ID3D12CommandAllocator* command_allocator[frame_buffer_count];
+
+IDXGISwapChain3* swap_chain; // swapchain used to switch between render targets
+
+ID3D12CommandQueue* command_queue; 
+ID3D12GraphicsCommandList* command_list;
+
+std::vector<FrameResource*> frame_resources;
+IDXGIFactory4* factory;
+int frame_index; // current rtv we are on
+D3D12_STATIC_SAMPLER_DESC sampler;
+// function declarations
+
+bool init_d3d(); // initializes direct3d 12
+bool init_dxgi();
+bool initialise_swap_chain();
+bool initialise_work_submission();
+void Update(); // update the game logic
+
+void UpdatePipeline(); // update the direct3d pipeline (update command lists)
+
+void Render(); // execute the command list
+
+void Cleanup(); // release com ojects and clean up memory
+
+void WaitForPreviousFrame(); 
+bool build_shaders_and_input_layout();
+bool build_pso();
+bool build_geometry();
+bool build_constant_views();
+
+bool build_descriptor_heaps();
+bool build_frame_resources();
+
+
+//Optional Geometry Objects we can draw
+bool build_cube();
+bool build_grid();
+
+bool build_root_signature();
+void build_viewport_scissor_rect();
+
+IDXGIAdapter1* adapter; // adapters are the graphics card (this includes the embedded graphics on the motherboard)
+int adapter_index = 0; // we'll start looking for directx 12  compatible graphics devices starting at index 0
+bool adapter_found = false; // set this to true when a good one was found
+
+std::vector< D3D12_INPUT_ELEMENT_DESC> input_layout;
+ID3D12PipelineState* pso; // pso containing a pipeline state
+
+ID3D12RootSignature* rootSignature; // root signature defines data shaders will access
+
+D3D12_VIEWPORT viewport; // area that output from rasterizer will be stretched to.
+
+D3D12_RECT scissorRect; // the area to draw in. pixels outside that area will not be drawn onto
+
+
+//Descriptor Heaps - Stores data outside of PSO (SRVs, RTVs, DSVs ect..)
+
+depth* main_depth;
+rtv* main_rtv;
+ID3D12DescriptorHeap* srv_heap;
+ID3D12DescriptorHeap* cbv_heap;
+FrameResource* frame;
+
+
+//Buffers - Stores memeory/data
+
 Texture* cube_texture = new Texture();
 Texture* cube_normal = new Texture();
+
+
+int cbv_offset = 0;
+XMFLOAT4X4 cameraProjMat;
+XMFLOAT4X4 cameraViewMat;
+
+
+int cbv_srv_uav_descriptor_size;
+DXGI_SAMPLE_DESC sample_desc;
+
+
+void load_texture();
+
+
+Shader* shader_vertex;
+Shader* shader_pixel;
+
+std::vector<Geometry*> objects;
