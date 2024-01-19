@@ -415,11 +415,11 @@ void Update()
 
 
 
-
+	auto object_cb = frame_resources.at(frame_index)->constant_buffer_object;
 
 	for (int i = 0; i < objects.size(); i++)
 	{
-		auto object_cb = frame_resources.at(i)->constant_buffer_object;
+
 		// create rotation matrices
 		XMMATRIX rotation_x = XMMatrixRotationX(0.0001f);
 		XMMATRIX rotation_y = XMMatrixRotationY(0.0002f);
@@ -1222,7 +1222,9 @@ bool build_grid()
 bool build_root_signature()
 {
 	HRESULT hr;
-	// create root signature
+	//Root Signature - Links resources the shader require, essentially a list of parameters/objects exposed to shaders.
+	//We can store - 
+	//Constants , Tables and Descriptors
 
 
 
