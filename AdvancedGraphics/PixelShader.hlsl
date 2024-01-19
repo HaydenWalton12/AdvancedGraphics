@@ -1,5 +1,4 @@
-Texture2D diffuse : register(t0);
-Texture2D normal : register(t1);
+Texture2D texture_maps[2] : register(t1);
 
 SamplerState s1 : register(s0);
 

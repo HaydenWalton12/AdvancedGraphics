@@ -32,6 +32,9 @@
     <FxCompile Include="VertexShader.hlsl">
       <Filter>Assets</Filter>
     </FxCompile>
+    <FxCompile Include="common.hlsl">
+      <Filter>Assets</Filter>
+    </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h">

@@ -10,11 +10,6 @@ struct VS_OUTPUT
     float2 texCoord : TEXCOORD;
 };
 
-cbuffer ConstantBuffer : register(b0)
-{
-    float4x4 wvpMat;
-};
-
 VS_OUTPUT main(VS_INPUT input)
 {
     VS_OUTPUT output;

@@ -38,6 +38,26 @@ struct DefaultConstantBuffer
 {
 
 };
+
+struct Material
+{
+	std::string name;
+
+	//Index to constant buffer to the materials
+	int material_cb_index;
+	//Index to srv heap for diffuse/colour texture
+	int diffuse_srv_heap_index;
+
+	//Same thing as above
+	int normal_srv_heap_index;
+
+	//Colour.
+	DirectX::XMFLOAT4 diffuse_albedo;
+	//Reflectance property
+	DirectX::XMFLOAT3 fresnel;
+	float roughness;
+	DirectX::XMFLOAT4X4 material_transformation;
+};
 struct Vertex {
 	Vertex(float x, float y, float z, float u, float v) : pos(x, y, z), texCoord(u, v) {}
 	XMFLOAT3 pos;
@@ -103,6 +123,7 @@ struct Geometry
 };
 struct Texture
 {
+	std::string texture_name;
 	std::wstring file_name;
 	Microsoft::WRL::ComPtr<ID3D12Resource> texture_default_buffer = nullptr;
 	Microsoft::WRL::ComPtr<ID3D12Resource> texture_upload_buffer = nullptr;
@@ -310,7 +331,7 @@ bool build_shaders_and_input_layout();
 bool build_pso();
 bool build_geometry();
 bool build_constant_views();
-
+bool build_materials();
 bool build_descriptor_heaps();
 bool build_frame_resources();
 
@@ -335,7 +356,9 @@ D3D12_VIEWPORT viewport; // area that output from rasterizer will be stretched t
 
 D3D12_RECT scissorRect; // the area to draw in. pixels outside that area will not be drawn onto
 
-
+std::vector<Material*> materials;
+std::vector<Texture*> textures;
+std::vector<Geometry*> objects;
 //Descriptor Heaps - Stores data outside of PSO (SRVs, RTVs, DSVs ect..)
 
 depth* main_depth;
@@ -345,10 +368,6 @@ ID3D12DescriptorHeap* cbv_heap;
 FrameResource* frame;
 
 
-//Buffers - Stores memeory/data
-
-Texture* cube_texture = new Texture();
-Texture* cube_normal = new Texture();
 
 
 int cbv_offset = 0;
@@ -365,5 +384,3 @@ void load_texture();
 
 Shader* shader_vertex;
 Shader* shader_pixel;
-
-std::vector<Geometry*> objects;

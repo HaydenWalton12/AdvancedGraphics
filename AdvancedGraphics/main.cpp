@@ -242,14 +242,15 @@ bool init_d3d()
 	initialise_swap_chain();
 
 	frame_index = swap_chain->GetCurrentBackBufferIndex();
-
+	load_texture();
 	build_root_signature();
 	build_shaders_and_input_layout();
 
 	build_geometry();
+	build_materials();
 	build_descriptor_heaps();
 
-	load_texture();
+
 	build_frame_resources();
 	build_constant_views();
 
@@ -705,7 +706,6 @@ bool build_geometry()
 bool build_constant_views()
 {
 	HRESULT hr;
-	cbv_srv_uav_descriptor_size = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	int object_cb_byte_size = frame_resources.at(0)->constant_buffer_per_object_byte_size;
 	int object_count = objects.size();
 	for (int frame = 0; frame < frame_buffer_count; ++frame)
@@ -738,6 +738,8 @@ bool build_constant_views()
 
 bool build_descriptor_heaps()
 {
+	cbv_srv_uav_descriptor_size = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
 	HRESULT hr;
 	main_depth = new depth();
 	main_rtv = new rtv();
@@ -767,11 +769,32 @@ bool build_descriptor_heaps()
 		return false;
 	}
 
-	D3D12_DESCRIPTOR_HEAP_DESC srv_desc = {};
-	srv_desc.NumDescriptors = 1;
-	srv_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-	srv_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-	hr = device->CreateDescriptorHeap(&srv_desc, IID_PPV_ARGS(&srv_heap));
+	D3D12_DESCRIPTOR_HEAP_DESC srv_heap_desc = {};
+	srv_heap_desc.NumDescriptors = 2;
+	srv_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+	srv_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	hr = device->CreateDescriptorHeap(&srv_heap_desc, IID_PPV_ARGS(&srv_heap));
+
+	//Used to offset to next pointer in srv heap to store next texture- handles are essentially pointers btw
+	CD3DX12_CPU_DESCRIPTOR_HANDLE srv_handle(srv_heap->GetCPUDescriptorHandleForHeapStart());
+
+	// now we create a shader resource view (descriptor that points to the texture and describes it)
+	D3D12_SHADER_RESOURCE_VIEW_DESC srv_view = {};
+	srv_view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srv_view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+	srv_view.Texture2D.MostDetailedMip = 0;
+	srv_view.Texture2D.ResourceMinLODClamp = 0.0f;
+	
+	for (auto texture : textures)
+	{
+		srv_view.Format = texture->texture_default_buffer->GetDesc().Format;
+		srv_view.Texture2D.MipLevels = texture->texture_default_buffer->GetDesc().MipLevels;
+		device->CreateShaderResourceView(texture->texture_default_buffer.Get(), &srv_view, srv_heap->GetCPUDescriptorHandleForHeapStart());
+
+		// next descriptor
+		srv_handle.Offset(1, cbv_srv_uav_descriptor_size);
+	}
+
 	if (FAILED(hr))
 	{
 		Running = false;
@@ -843,7 +866,6 @@ bool build_descriptor_heaps()
 		// we increment the rtv handle by the rtv descriptor size we got above
 		rtv_handle.Offset(1, main_rtv->rtv_descriptor_size);
 	}
-
 
 	return true;
 }
@@ -1245,11 +1267,20 @@ bool build_root_signature()
 	D3D12_ROOT_DESCRIPTOR rootCBVDescriptor;
 	rootCBVDescriptor.RegisterSpace = 0;
 	rootCBVDescriptor.ShaderRegister = 0;
+
+	D3D12_ROOT_DESCRIPTOR rootCBVDescriptor2;
+	rootCBVDescriptor2.RegisterSpace = 1;
+	rootCBVDescriptor2.ShaderRegister = 0;
+
 	// create a root parameter for the root descriptor and fill it out
-	D3D12_ROOT_PARAMETER  rootParameters[2]; // only one parameter right now
+	D3D12_ROOT_PARAMETER  rootParameters[3]; // only one parameter right now
 	rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; // this is a constant buffer view root descriptor
 	rootParameters[0].Descriptor = rootCBVDescriptor; // this is the root descriptor for this root parameter
 	rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX; // our pixel shader will be the only shader accessing this parameter for now
+	
+	rootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV; // this is a constant buffer view root descriptor
+	rootParameters[2].Descriptor = rootCBVDescriptor2; // this is the root descriptor for this root parameter
+	rootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX; // our pixel shader will be the only shader accessing this parameter for now
 
 	// fill out the parameter for our descriptor table. Remember it's a good idea to sort parameters by frequency of change. Our constant
 	// buffer will be changed multiple times per frame, while our descriptor table will not be changed at all (in this tutorial)
@@ -1316,23 +1347,36 @@ void build_viewport_scissor_rect()
 	scissorRect.bottom = Height;
 }
 
+bool build_materials()
+{
+	auto cube = new Material();
+	cube->name = "cube";
+	cube->material_cb_index = 0;
+	cube->diffuse_srv_heap_index = 0;
+	cube->normal_srv_heap_index = 1;
+	cube->diffuse_albedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+	cube->fresnel = XMFLOAT3(0.1f, 0.1f, 0.1f);
+	cube->roughness = 0.3f;
+
+	materials.push_back(cube);
+	return true;
+}
+
 void load_texture()
 {
 	HRESULT hr;
+	auto cube_texture = new Texture();
+	cube_texture->texture_name = "Cube Albedo Texture";
 	cube_texture->file_name = L"Textures/bricks.dds";
 	hr = DirectX::CreateDDSTextureFromFile12(device, command_list, cube_texture->file_name.c_str(), cube_texture->texture_default_buffer, cube_texture->texture_upload_buffer);
 
+	auto cube_normal = new Texture();
+	cube_normal->texture_name = "Cube Normal Texture";
 	cube_normal->file_name = L"Textures/normal.dds";
-	hr = DirectX::CreateDDSTextureFromFile12(device, command_list, cube_texture->file_name.c_str(), cube_texture->texture_default_buffer, cube_texture->texture_upload_buffer);
+	hr = DirectX::CreateDDSTextureFromFile12(device, command_list, cube_normal->file_name.c_str(), cube_normal->texture_default_buffer, cube_normal->texture_upload_buffer);
 
-	// now we create a shader resource view (descriptor that points to the texture and describes it)
-	D3D12_SHADER_RESOURCE_VIEW_DESC desc = {};
-	desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-	desc.Format = cube_texture->texture_default_buffer->GetDesc().Format;
-	desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-	desc.Texture2D.MipLevels = 1;
-
-	device->CreateShaderResourceView(cube_texture->texture_default_buffer.Get(), &desc, srv_heap->GetCPUDescriptorHandleForHeapStart());
+	textures.push_back(cube_texture);
+	textures.push_back(cube_normal);
 
 }
 
